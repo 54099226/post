@@ -1,0 +1,1551 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>在线HTTP请求工具 - 带历史记录下载功能</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+    <!-- 引入SheetJS库用于生成Excel文件 -->
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <!-- 引入FileSaver.js用于保存文件 -->
+    <script src="https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#3B82F6',
+                        secondary: '#10B981',
+                        danger: '#EF4444',
+                        dark: '#1E293B',
+                        light: '#F8FAFC',
+                        highlight: '#FFF380',
+                        warning: '#F59E0B'
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'system-ui', 'sans-serif'],
+                    },
+                }
+            }
+        }
+    </script>
+    <style type="text/tailwindcss">
+        @layer utilities {
+            .content-auto {
+                content-visibility: auto;
+            }
+            .timer-active {
+                animation: pulse 2s infinite;
+            }
+            @keyframes pulse {
+                0% { opacity: 1; }
+                50% { opacity: 0.7; }
+                100% { opacity: 1; }
+            }
+            .tab-active {
+                @apply bg-primary text-white border-primary;
+            }
+            .raw-placeholder {
+                transition: opacity 0.2s ease-in-out;
+            }
+            .search-highlight {
+                @apply bg-highlight px-0.5 rounded;
+            }
+            .stop-trigger-highlight {
+                @apply bg-red-200 px-0.5 rounded text-red-800 font-medium;
+            }
+        }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <div class="container mx-auto px-4 py-8 max-w-6xl">
+        <header class="mb-8">
+            <h1 class="text-[clamp(1.8rem,4vw,2.5rem)] font-bold text-dark flex items-center">
+                <i class="fa fa-exchange text-primary mr-3"></i>
+                在线HTTP请求工具
+            </h1>
+            <p class="text-gray-600 mt-2">支持实时展示、结果查找、关键词触发停止和历史记录下载功能</p>
+        </header>
+
+        <main class="bg-white rounded-xl shadow-md overflow-hidden min-h-[calc(100vh-200px)]">
+            <!-- 请求配置区域 -->
+            <div class="p-6 border-b border-gray-100">
+                <!-- 请求方法选择 -->
+                <div class="flex flex-wrap gap-3 mb-6">
+                    <button id="method-get" class="px-5 py-2 rounded-lg bg-gray-200 text-gray-700 font-medium hover:bg-gray-300 transition-all">
+                        GET
+                    </button>
+                    <button id="method-post" class="px-5 py-2 rounded-lg bg-primary text-white font-medium hover:bg-primary/90 transition-all">
+                        POST
+                    </button>
+                </div>
+
+                <!-- URL输入 -->
+                <div class="mb-6">
+                    <label for="url" class="block text-sm font-medium text-gray-700 mb-1">请求URL</label>
+                    <div class="flex">
+                        <input 
+                            type="text" 
+                            id="url" 
+                            class="flex-1 px-4 py-2 border border-gray-300 rounded-l-lg focus:ring-2 focus:ring-primary focus:border-primary outline-none transition-all"
+                            placeholder="https://api.example.com/endpoint"
+                            value="https://httpbin.org/post"
+                        >
+                        <button id="send-request" class="bg-secondary hover:bg-secondary/90 text-white px-6 py-2 rounded-r-lg font-medium transition-all flex items-center">
+                            <i class="fa fa-paper-plane mr-2"></i>立即发送
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 关键词停止触发设置 -->
+                <div class="mb-6 bg-amber-50 p-4 rounded-lg border border-amber-100">
+                    <h3 class="text-sm font-semibold text-amber-800 mb-3 flex items-center">
+                        <i class="fa fa-stop-circle mr-2"></i>关键词触发停止设置
+                    </h3>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 items-center">
+                        <div class="sm:col-span-2 md:col-span-2">
+                            <label for="stop-trigger-keyword" class="block text-sm font-medium text-gray-700 mb-1">
+                                停止触发关键词（响应中包含此字符时停止发送）
+                            </label>
+                            <input 
+                                type="text" 
+                                id="stop-trigger-keyword" 
+                                class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-danger focus:border-danger outline-none transition-all"
+                                placeholder="例如：error、fail、500等"
+                            >
+                            <p class="mt-1 text-xs text-gray-500">
+                                留空则不启用关键词停止功能，支持区分大小写（与搜索区分大小写同步）
+                            </p>
+                        </div>
+                        <div class="flex items-center">
+                            <label class="inline-flex items-center text-sm text-gray-600">
+                                <input type="checkbox" id="stop-trigger-enabled" class="form-checkbox h-4 w-4 text-danger rounded">
+                                <span class="ml-2">启用关键词停止</span>
+                            </label>
+                        </div>
+                    </div>
+                    <div id="stop-trigger-alert" class="mt-3 text-sm hidden">
+                        <span class="inline-block px-2 py-1 rounded bg-red-100 text-red-800 flex items-center">
+                            <i class="fa fa-exclamation-circle mr-1"></i>
+                            <span>已触发关键词停止条件，已停止发送后续请求</span>
+                        </span>
+                    </div>
+                </div>
+
+                <!-- 数据输入方式切换 -->
+                <div class="mb-4 border-b border-gray-200">
+                    <div class="flex">
+                        <button id="tab-form" class="px-4 py-2 border-b-2 border-transparent text-gray-500 font-medium hover:text-gray-700 rounded-t">
+                            表单模式
+                        </button>
+                        <button id="tab-raw" class="tab-active px-4 py-2 border-b-2 font-medium rounded-t">
+                            Raw模式
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 表单模式配置区 -->
+                <div id="form-mode" class="mb-6 hidden">
+                    <!-- 定时发送设置 -->
+                    <div class="mb-6 bg-purple-50 p-4 rounded-lg border border-purple-100">
+                        <h3 class="text-sm font-semibold text-purple-800 mb-3 flex items-center">
+                            <i class="fa fa-clock-o mr-2"></i>定时发送设置
+                        </h3>
+                        <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+                            <div>
+                                <label for="timer-date" class="block text-sm font-medium text-gray-700 mb-1">日期</label>
+                                <input 
+                                    type="date" 
+                                    id="timer-date" 
+                                    class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-primary outline-none transition-all"
+                                >
+                            </div>
+                            <div>
+                                <label for="timer-time" class="block text-sm font-medium text-gray-700 mb-1">时间</label>
+                                <input 
+                                    type="time" 
+                                    id="timer-time" 
+                                    class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-primary outline-none transition-all"
+                                >
+                            </div>
+                            <div class="flex items-end">
+                                <button id="set-timer" class="w-full bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg font-medium transition-all flex items-center justify-center">
+                                    <i class="fa fa-play mr-2"></i>设置定时
+                                </button>
+                            </div>
+                        </div>
+                        <div id="timer-status" class="mt-3 text-sm hidden">
+                            <span class="inline-block px-2 py-1 rounded bg-purple-100 text-purple-800 timer-active">
+                                <i class="fa fa-clock-o mr-1"></i>
+                                <span>定时等待中：将在 <span id="countdown"></span> 后发送请求</span>
+                            </span>
+                            <button id="cancel-timer" class="ml-2 text-sm text-danger hover:text-danger/80">
+                                <i class="fa fa-times mr-1"></i>取消
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 循环和频率控制 -->
+                    <div class="mb-6 bg-blue-50 p-4 rounded-lg border border-blue-100">
+                        <h3 class="text-sm font-semibold text-blue-800 mb-3 flex items-center">
+                            <i class="fa fa-refresh mr-2"></i>循环发送设置
+                        </h3>
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div>
+                                <label for="loop-count" class="block text-sm font-medium text-gray-700 mb-1">循环次数</label>
+                                <input 
+                                    type="number" 
+                                    id="loop-count" 
+                                    class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-primary outline-none transition-all"
+                                    placeholder="发送次数"
+                                    value="10000"
+                                    min="1"
+                                >
+                            </div>
+                            <div>
+                                <label for="request-interval" class="block text-sm font-medium text-gray-700 mb-1">发送间隔(毫秒)</label>
+                                <input 
+                                    type="number" 
+                                    id="request-interval" 
+                                    class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-primary outline-none transition-all"
+                                    placeholder="每次发送间隔的毫秒数"
+                                    value="10"
+                                    min="10"
+                                >
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 请求头配置 -->
+                    <div class="mb-6">
+                        <div class="flex items-center justify-between mb-2">
+                            <label class="block text-sm font-medium text-gray-700">请求头</label>
+                            <button id="add-header" class="text-sm text-primary hover:text-primary/80 flex items-center">
+                                <i class="fa fa-plus-circle mr-1"></i>添加
+                            </button>
+                        </div>
+                        <div id="headers-container" class="space-y-2">
+                            <div class="flex header-row">
+                                <input type="text" placeholder="Key" class="flex-1 px-3 py-2 border border-gray-300 rounded-l-md focus:ring-1 focus:ring-primary focus:border-primary outline-none" value="Content-Type">
+                                <input type="text" placeholder="Value" class="flex-1 px-3 py-2 border-t border-b border-gray-300 focus:ring-1 focus:ring-primary focus:border-primary outline-none" value="application/json">
+                                <button class="remove-header bg-gray-100 hover:bg-gray-200 px-3 py-2 border border-gray-300 rounded-r-md text-gray-500 transition-all">
+                                    <i class="fa fa-trash-o"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 请求体 (POST专用) -->
+                    <div id="body-container" class="mb-6">
+                        <label for="request-body" class="block text-sm font-medium text-gray-700 mb-1">请求体</label>
+                        <textarea 
+                            id="request-body" 
+                            class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-primary outline-none transition-all min-h-[120px] font-mono text-sm"
+                            placeholder='{"key": "value"}'
+                            oninput="if(this.value.charAt(0) === ' ') this.value = this.value.trimStart()"
+                        ></textarea>
+                    </div>
+                </div>
+
+                <!-- Raw模式配置区 -->
+                <div id="raw-mode" class="mb-6">
+                    <div class="mb-4">
+                        <label for="raw-data" class="block text-sm font-medium text-gray-700 mb-1">
+                            Raw数据 (支持完整请求格式，会自动识别方法、URL、请求头和请求体)
+                        </label>
+                        <div class="relative">
+                            <!-- 示例文本将作为背景，当用户输入时消失 -->
+                            <pre id="raw-placeholder" class="raw-placeholder absolute top-2 left-3 text-gray-400 pointer-events-none text-sm">POST /post HTTP/1.1
+Host: httpbin.org
+User-Agent: MyClient/1.0
+Referer: https://example.com
+Cookie: session=12345
+Content-Type: application/json
+
+{"param": "value"}</pre>
+                            <textarea 
+                                id="raw-data" 
+                                class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-primary outline-none transition-all min-h-[300px] font-mono text-sm"
+                                placeholder=""
+                            ></textarea>
+                        </div>
+                    </div>
+                    <div class="flex justify-end">
+                        <button id="parse-raw" class="bg-primary hover:bg-primary/90 text-white px-4 py-2 rounded-lg font-medium transition-all flex items-center">
+                            <i class="fa fa-magic mr-2"></i>解析Raw数据
+                        </button>
+                    </div>
+                    <div id="parse-result" class="mt-3 text-sm hidden"></div>
+                </div>
+            </div>
+
+            <!-- 响应结果区域 -->
+            <div class="p-6">
+                <div class="flex flex-wrap items-center justify-between mb-4 gap-2">
+                    <h2 class="text-lg font-semibold text-gray-800">响应结果</h2>
+                    
+                    <!-- 搜索功能 -->
+                    <div class="relative flex-1 max-w-md ml-auto md:ml-0 mt-2 sm:mt-0">
+                        <input 
+                            type="text" 
+                            id="search-results" 
+                            class="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-primary outline-none transition-all text-sm"
+                            placeholder="搜索结果中的内容..."
+                        >
+                        <i class="fa fa-search absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"></i>
+                        <button id="clear-search" class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 hidden">
+                            <i class="fa fa-times"></i>
+                        </button>
+                        <div id="search-stats" class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 text-xs hidden">
+                            <span id="match-count">0</span> 个匹配
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
+                    <div class="flex items-center text-sm">
+                        <span id="status-code" class="px-2 py-1 rounded bg-gray-100 text-gray-600 mr-3">-</span>
+                        <span id="response-time" class="text-gray-500">响应时间: -</span>
+                        <span id="progress-info" class="ml-4 text-gray-500 hidden">进度: 0/0</span>
+                    </div>
+                    
+                    <!-- 搜索导航按钮 -->
+                    <div id="search-navigation" class="flex gap-2 hidden">
+                        <button id="search-prev" class="bg-gray-200 hover:bg-gray-300 text-gray-700 px-3 py-1 rounded-lg font-medium transition-all flex items-center text-sm">
+                            <i class="fa fa-chevron-up mr-1"></i>上一个
+                        </button>
+                        <button id="search-next" class="bg-gray-200 hover:bg-gray-300 text-gray-700 px-3 py-1 rounded-lg font-medium transition-all flex items-center text-sm">
+                            <i class="fa fa-chevron-down mr-1"></i>下一个
+                        </button>
+                        <label class="inline-flex items-center text-sm text-gray-600 ml-2">
+                            <input type="checkbox" id="case-sensitive" class="form-checkbox h-4 w-4 text-primary rounded">
+                            <span class="ml-2">区分大小写</span>
+                        </label>
+                    </div>
+                </div>
+                
+                <div class="flex flex-wrap gap-2 mb-4 justify-between">
+                    <button id="stop-request" class="bg-danger hover:bg-danger/90 text-white px-3 py-1.5 rounded-lg font-medium transition-all flex items-center text-xs sm:text-sm hidden">
+                        <i class="fa fa-stop mr-1"></i><span class="hidden sm:inline">停止</span>发送
+                    </button>
+                    <button id="clear-history" class="bg-gray-200 hover:bg-gray-300 text-gray-700 px-3 py-1.5 rounded-lg font-medium transition-all flex items-center text-xs sm:text-sm">
+                        <i class="fa fa-eraser mr-1"></i><span class="hidden sm:inline">清空</span>历史
+                    </button>
+                    <!-- 下载历史记录按钮 -->
+                    <div class="flex gap-1 sm:gap-2">
+                        <button id="download-txt" class="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg font-medium transition-all flex items-center text-xs sm:text-sm" disabled>
+                            <i class="fa fa-download mr-1"></i><span class="hidden sm:inline">下载</span>TXT
+                        </button>
+                        <button id="download-xlsx" class="bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded-lg font-medium transition-all flex items-center text-xs sm:text-sm" disabled>
+                            <i class="fa fa-download mr-1"></i><span class="hidden sm:inline">下载</span>XLSX
+                        </button>
+                    </div>
+                    <div class="ml-auto">
+                        <label class="inline-flex items-center text-xs sm:text-sm text-gray-600">
+                            <input type="checkbox" id="order-by-oldest" class="form-checkbox h-3 w-3 sm:h-4 sm:w-4 text-primary rounded">
+                            <span class="ml-1 sm:ml-2 hidden sm:inline">按时间正序排列</span>
+                            <span class="ml-1 sm:hidden">正序</span>
+                        </label>
+                    </div>
+                </div>
+                
+                <div class="relative">
+                    <div id="loading-indicator" class="absolute inset-0 bg-white/80 flex items-center justify-center hidden">
+                        <div class="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary"></div>
+                    </div>
+                    <div id="results-container" class="space-y-4 max-h-[500px] overflow-auto">
+                        <div id="initial-response" class="bg-gray-50 p-4 rounded-lg border border-gray-200 overflow-auto font-mono text-sm text-gray-500">
+                            响应结果将在这里实时显示...
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <footer class="mt-8 text-center text-gray-500 text-sm">
+            <p>使用HTML、JavaScript和Tailwind CSS构建 | 支持历史记录下载功能</p>
+        </footer>
+    </div>
+
+    <script>
+        // 全局状态
+        let currentMethod = 'POST';
+        let isSending = false;
+        let currentLoop = 0;
+        let totalLoops = 0;
+        let loopInterval = null;
+        let timerInterval = null;
+        let timerId = null;
+        let requestItems = []; // 存储所有请求项，用于排序和导出
+        let orderByOldest = false; // 排序方式：false表示最新的在前，true表示最旧的在前
+        let searchMatches = []; // 存储搜索匹配项
+        let currentMatchIndex = -1; // 当前选中的匹配项索引
+        let stopTriggered = false; // 标记是否已触发停止
+        
+        // DOM元素
+        const methodGetBtn = document.getElementById('method-get');
+        const methodPostBtn = document.getElementById('method-post');
+        const bodyContainer = document.getElementById('body-container');
+        const addHeaderBtn = document.getElementById('add-header');
+        const headersContainer = document.getElementById('headers-container');
+        const sendRequestBtn = document.getElementById('send-request');
+        const stopRequestBtn = document.getElementById('stop-request');
+        const clearHistoryBtn = document.getElementById('clear-history');
+        const urlInput = document.getElementById('url');
+        const requestBodyInput = document.getElementById('request-body');
+        const statusCodeElement = document.getElementById('status-code');
+        const responseTimeElement = document.getElementById('response-time');
+        const progressInfoElement = document.getElementById('progress-info');
+        const loadingIndicator = document.getElementById('loading-indicator');
+        const resultsContainer = document.getElementById('results-container');
+        const loopCountInput = document.getElementById('loop-count');
+        const requestIntervalInput = document.getElementById('request-interval');
+        const timerDateInput = document.getElementById('timer-date');
+        const timerTimeInput = document.getElementById('timer-time');
+        const setTimerBtn = document.getElementById('set-timer');
+        const cancelTimerBtn = document.getElementById('cancel-timer');
+        const timerStatusElement = document.getElementById('timer-status');
+        const countdownElement = document.getElementById('countdown');
+        const orderByOldestCheckbox = document.getElementById('order-by-oldest');
+        const tabFormBtn = document.getElementById('tab-form');
+        const tabRawBtn = document.getElementById('tab-raw');
+        const formModeContainer = document.getElementById('form-mode');
+        const rawModeContainer = document.getElementById('raw-mode');
+        const rawDataInput = document.getElementById('raw-data');
+        const rawPlaceholder = document.getElementById('raw-placeholder');
+        const parseRawBtn = document.getElementById('parse-raw');
+        const parseResultElement = document.getElementById('parse-result');
+        const searchInput = document.getElementById('search-results');
+        const clearSearchBtn = document.getElementById('clear-search');
+        const searchStats = document.getElementById('search-stats');
+        const matchCountElement = document.getElementById('match-count');
+        const searchNavigation = document.getElementById('search-navigation');
+        const searchPrevBtn = document.getElementById('search-prev');
+        const searchNextBtn = document.getElementById('search-next');
+        const caseSensitiveCheckbox = document.getElementById('case-sensitive');
+        // 关键词停止相关元素
+        const stopTriggerKeywordInput = document.getElementById('stop-trigger-keyword');
+        const stopTriggerEnabledCheckbox = document.getElementById('stop-trigger-enabled');
+        const stopTriggerAlert = document.getElementById('stop-trigger-alert');
+        // 下载按钮
+        const downloadTxtBtn = document.getElementById('download-txt');
+        const downloadXlsxBtn = document.getElementById('download-xlsx');
+
+        // 初始化日期为今天
+        const today = new Date();
+        const year = today.getFullYear();
+        const month = String(today.getMonth() + 1).padStart(2, '0');
+        const day = String(today.getDate()).padStart(2, '0');
+        timerDateInput.value = `${year}-${month}-${day}`;
+        
+        // 设置默认时间为当前时间加1分钟
+        const nextMinute = new Date(today.getTime() + 60000);
+        const hours = String(nextMinute.getHours()).padStart(2, '0');
+        const minutes = String(nextMinute.getMinutes()).padStart(2, '0');
+        timerTimeInput.value = `${hours}:${minutes}`;
+
+        // 处理Raw输入框的示例文本显示/隐藏
+        function updateRawPlaceholder() {
+            if (rawDataInput.value.trim() === '') {
+                rawPlaceholder.style.opacity = '1'; // 显示示例
+            } else {
+                rawPlaceholder.style.opacity = '0'; // 隐藏示例
+            }
+        }
+
+        // 初始化时检查
+        updateRawPlaceholder();
+
+        // 监听输入事件，控制示例文本显示
+        rawDataInput.addEventListener('input', updateRawPlaceholder);
+        rawDataInput.addEventListener('focus', updateRawPlaceholder);
+        rawDataInput.addEventListener('blur', updateRawPlaceholder);
+
+        // 切换表单模式和Raw模式时更新示例显示
+        tabRawBtn.addEventListener('click', () => {
+            setTimeout(updateRawPlaceholder, 10); // 延迟一点确保DOM已更新
+        });
+
+        // 切换表单模式和Raw模式
+        tabFormBtn.addEventListener('click', () => {
+            tabFormBtn.classList.add('tab-active');
+            tabFormBtn.classList.remove('text-gray-500', 'border-transparent');
+            tabFormBtn.classList.add('border-b-2');
+            tabRawBtn.classList.remove('tab-active', 'border-b-2');
+            tabRawBtn.classList.add('text-gray-500', 'border-transparent');
+            formModeContainer.classList.remove('hidden');
+            rawModeContainer.classList.add('hidden');
+        });
+
+        tabRawBtn.addEventListener('click', () => {
+            tabRawBtn.classList.add('tab-active', 'border-b-2');
+            tabRawBtn.classList.remove('text-gray-500', 'border-transparent');
+            tabFormBtn.classList.remove('tab-active', 'border-b-2');
+            tabFormBtn.classList.add('text-gray-500', 'border-transparent');
+            rawModeContainer.classList.remove('hidden');
+            formModeContainer.classList.add('hidden');
+        });
+
+        // 解析Raw数据
+        parseRawBtn.addEventListener('click', () => {
+            const rawData = rawDataInput.value.trim();
+            if (!rawData) {
+                showParseResult('<i class="fa fa-exclamation-circle mr-1"></i>请输入Raw数据', 'error');
+                return;
+            }
+
+            try {
+                const parsed = parseRawRequest(rawData);
+                showParseResult(`
+                    <div class="text-green-600"><i class="fa fa-check-circle mr-1"></i>解析成功</div>
+                    <div class="mt-2 text-sm space-y-1">
+                        <div><strong>方法:</strong> ${parsed.method}</div>
+                        <div><strong>URL:</strong> ${parsed.url}</div>
+                        <div><strong>识别的请求头:</strong> ${Object.keys(parsed.headers).length}</div>
+                        ${parsed.body ? `<div><strong>请求体:</strong> 存在</div>` : ''}
+                    </div>
+                    <div class="mt-2 text-amber-600"><i class="fa fa-clock-o mr-1"></i>将在2秒后自动切换到表单模式...</div>
+                `, 'success');
+                
+                // 自动填充到表单
+                currentMethod = parsed.method;
+                urlInput.value = parsed.url;
+                
+                // 更新方法按钮状态
+                if (currentMethod === 'GET') {
+                    methodGetBtn.click();
+                } else {
+                    methodPostBtn.click();
+                }
+                
+                // 清空现有请求头
+                const headerRows = document.querySelectorAll('.header-row');
+                headerRows.forEach((row, index) => {
+                    if (index > 0) { // 保留第一行
+                        headersContainer.removeChild(row);
+                    }
+                });
+                
+                // 添加解析到的请求头
+                const firstRow = headersContainer.querySelector('.header-row');
+                let headerAdded = false;
+                
+                for (const [key, value] of Object.entries(parsed.headers)) {
+                    if (!headerAdded) {
+                        // 使用第一行
+                        firstRow.children[0].value = key;
+                        firstRow.children[1].value = value;
+                        headerAdded = true;
+                    } else {
+                        // 添加新行
+                        addHeaderRow(key, value);
+                    }
+                }
+                
+                // 如果有请求体，填充到请求体
+                if (parsed.body) {
+                    requestBodyInput.value = parsed.body;
+                }
+                
+                // 2秒后自动切换到表单模式
+                setTimeout(() => {
+                    tabFormBtn.click();
+                }, 2000);
+                
+            } catch (error) {
+                showParseResult(`<i class="fa fa-exclamation-circle mr-1"></i>解析失败: ${error.message}`, 'error');
+            }
+        });
+
+        // 显示解析结果
+        function showParseResult(message, type) {
+            parseResultElement.classList.remove('hidden', 'text-green-600', 'text-red-600');
+            parseResultElement.classList.add(type === 'success' ? 'text-green-600' : 'text-red-600');
+            parseResultElement.innerHTML = message;
+            
+            // 3秒后自动隐藏成功消息
+            if (type === 'success') {
+                setTimeout(() => {
+                    parseResultElement.classList.add('hidden');
+                }, 3000);
+            }
+        }
+
+        // 解析Raw请求数据
+        function parseRawRequest(raw) {
+            const lines = raw.split('\n').map(line => line.trimEnd());
+            if (lines.length === 0) throw new Error('没有数据可解析');
+            
+            // 解析第一行获取方法和路径
+            const firstLine = lines[0];
+            const firstLineParts = firstLine.split(' ');
+            if (firstLineParts.length < 2) throw new Error('第一行格式不正确，应为 "方法 路径 [协议版本]"');
+            
+            const method = firstLineParts[0].toUpperCase();
+            if (!['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'].includes(method)) {
+                throw new Error(`不支持的HTTP方法: ${method}`);
+            }
+            
+            let path = firstLineParts[1];
+            
+            // 解析请求头
+            const headers = {};
+            let emptyLineIndex = -1;
+            
+            for (let i = 1; i < lines.length; i++) {
+                if (lines[i] === '') {
+                    emptyLineIndex = i;
+                    break;
+                }
+                
+                const colonIndex = lines[i].indexOf(':');
+                if (colonIndex === -1) continue;
+                
+                const key = lines[i].substring(0, colonIndex).trim();
+                const value = lines[i].substring(colonIndex + 1).trim();
+                headers[key] = value;
+            }
+            
+            // 构建完整URL
+            let url = path;
+            // 检查path是否已经是完整URL（包含协议）
+            if (!url.match(/^https?:\/\//i) && headers.Host) {
+                const protocol = headers['X-Protocol'] || 'https';
+                url = `${protocol}://${headers.Host}${path}`;
+            }
+            
+            // 解析请求体
+            let body = null;
+            if (emptyLineIndex !== -1 && emptyLineIndex < lines.length - 1) {
+                body = lines.slice(emptyLineIndex + 1).join('\n');
+            }
+            
+            return { method, url, headers, body };
+        }
+
+        // 排序方式切换
+        orderByOldestCheckbox.addEventListener('change', function() {
+            orderByOldest = this.checked;
+            reorderResults(); // 重新排序结果
+        });
+
+        // 方法切换事件
+        methodGetBtn.addEventListener('click', () => {
+            currentMethod = 'GET';
+            methodGetBtn.classList.remove('bg-gray-200', 'text-gray-700');
+            methodGetBtn.classList.add('bg-primary', 'text-white');
+            methodPostBtn.classList.remove('bg-primary', 'text-white');
+            methodPostBtn.classList.add('bg-gray-200', 'text-gray-700');
+            bodyContainer.classList.add('hidden');
+        });
+
+        methodPostBtn.addEventListener('click', () => {
+            currentMethod = 'POST';
+            methodPostBtn.classList.remove('bg-gray-200', 'text-gray-700');
+            methodPostBtn.classList.add('bg-primary', 'text-white');
+            methodGetBtn.classList.remove('bg-primary', 'text-white');
+            methodGetBtn.classList.add('bg-gray-200', 'text-gray-700');
+            bodyContainer.classList.remove('hidden');
+        });
+
+        // 添加请求头
+        addHeaderBtn.addEventListener('click', () => {
+            addHeaderRow();
+        });
+
+        // 添加请求头行
+        function addHeaderRow(key = '', value = '') {
+            const headerRow = document.createElement('div');
+            headerRow.className = 'flex header-row';
+            headerRow.innerHTML = `
+                <input type="text" placeholder="Key" class="flex-1 px-3 py-2 border border-gray-300 rounded-l-md focus:ring-1 focus:ring-primary focus:border-primary outline-none" value="${escapeHtml(key)}">
+                <input type="text" placeholder="Value" class="flex-1 px-3 py-2 border-t border-b border-gray-300 focus:ring-1 focus:ring-primary focus:border-primary outline-none" value="${escapeHtml(value)}">
+                <button class="remove-header bg-gray-100 hover:bg-gray-200 px-3 py-2 border border-gray-300 rounded-r-md text-gray-500 transition-all">
+                    <i class="fa fa-trash-o"></i>
+                </button>
+            `;
+            headersContainer.appendChild(headerRow);
+            
+            // 为新添加的删除按钮绑定事件
+            headerRow.querySelector('.remove-header').addEventListener('click', function() {
+                headersContainer.removeChild(headerRow);
+            });
+        }
+
+        // 初始删除按钮事件绑定
+        document.querySelectorAll('.remove-header').forEach(btn => {
+            btn.addEventListener('click', function() {
+                headersContainer.removeChild(this.closest('.header-row'));
+            });
+        });
+
+        // 发送请求
+        sendRequestBtn.addEventListener('click', startSendingRequests);
+        
+        // 停止请求
+        stopRequestBtn.addEventListener('click', stopSendingRequests);
+        
+        // 清空历史
+        clearHistoryBtn.addEventListener('click', function() {
+            clearHistory();
+            // 清空搜索
+            searchInput.value = '';
+            clearSearch();
+            // 重置停止触发状态
+            resetStopTrigger();
+            // 禁用下载按钮
+            updateDownloadButtonsState();
+        });
+        
+        // 重置停止触发状态
+        function resetStopTrigger() {
+            stopTriggered = false;
+            stopTriggerAlert.classList.add('hidden');
+            // 启用发送按钮
+            sendRequestBtn.disabled = false;
+            sendRequestBtn.classList.remove('opacity-70', 'cursor-not-allowed');
+        }
+        
+        // 设置定时
+        setTimerBtn.addEventListener('click', setTimer);
+        
+        // 取消定时
+        cancelTimerBtn.addEventListener('click', cancelTimer);
+
+        // 按Enter键发送请求
+        urlInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter' && !isSending && !timerId && !stopTriggered) startSendingRequests();
+        });
+
+        // 搜索功能
+        searchInput.addEventListener('input', performSearch);
+        clearSearchBtn.addEventListener('click', clearSearch);
+        caseSensitiveCheckbox.addEventListener('change', performSearch);
+        
+        // 搜索导航
+        searchPrevBtn.addEventListener('click', () => navigateSearch(-1));
+        searchNextBtn.addEventListener('click', () => navigateSearch(1));
+        
+        // 支持键盘导航
+        document.addEventListener('keydown', (e) => {
+            // 如果搜索框有焦点且按下了Enter或上下箭头
+            if (searchInput === document.activeElement) {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    navigateSearch(1); // 下一个匹配
+                } else if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    navigateSearch(-1); // 上一个匹配
+                } else if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    navigateSearch(1); // 下一个匹配
+                }
+            }
+        });
+
+        // 执行搜索
+        function performSearch() {
+            const searchTerm = searchInput.value.trim();
+            
+            // 清除之前的高亮
+            clearHighlights();
+            
+            if (searchTerm === '') {
+                // 清空搜索状态
+                clearSearch();
+                return;
+            }
+            
+            // 显示搜索控件
+            clearSearchBtn.classList.remove('hidden');
+            searchNavigation.classList.remove('hidden');
+            
+            // 收集所有结果中的文本内容
+            const resultElements = resultsContainer.querySelectorAll('pre');
+            searchMatches = [];
+            
+            // 检查区分大小写
+            const flags = caseSensitiveCheckbox.checked ? 'g' : 'gi';
+            const regex = new RegExp(escapeRegExp(searchTerm), flags);
+            
+            // 查找所有匹配项
+            resultElements.forEach((preElement, resultIndex) => {
+                const originalHTML = preElement.innerHTML;
+                let text = preElement.textContent;
+                let match;
+                
+                // 保存原始HTML以便恢复
+                preElement.dataset.originalHtml = originalHTML;
+                
+                // 查找所有匹配
+                while ((match = regex.exec(text)) !== null) {
+                    searchMatches.push({
+                        resultIndex,
+                        preElement,
+                        start: match.index,
+                        end: match.index + match[0].length,
+                        text: match[0]
+                    });
+                }
+                
+                // 高亮当前结果中的匹配项
+                if (searchMatches.some(m => m.resultIndex === resultIndex)) {
+                    highlightMatches(preElement, regex);
+                }
+            });
+            
+            // 更新匹配计数
+            matchCountElement.textContent = searchMatches.length;
+            searchStats.classList.remove('hidden');
+            
+            // 重置当前匹配索引
+            currentMatchIndex = -1;
+            
+            // 如果有匹配项，选中第一个
+            if (searchMatches.length > 0) {
+                currentMatchIndex = 0;
+                scrollToMatch(currentMatchIndex);
+            }
+        }
+
+        // 清除搜索
+        function clearSearch() {
+            clearHighlights();
+            searchMatches = [];
+            currentMatchIndex = -1;
+            clearSearchBtn.classList.add('hidden');
+            searchNavigation.classList.add('hidden');
+            searchStats.classList.add('hidden');
+        }
+
+        // 清除所有高亮
+        function clearHighlights() {
+            const resultElements = resultsContainer.querySelectorAll('pre');
+            resultElements.forEach(preElement => {
+                if (preElement.dataset.originalHtml) {
+                    preElement.innerHTML = preElement.dataset.originalHtml;
+                    delete preElement.dataset.originalHtml;
+                }
+            });
+        }
+
+        // 在元素中高亮匹配项
+        function highlightMatches(element, regex) {
+            const text = element.textContent;
+            let html = text.replace(regex, match => {
+                return `<span class="search-highlight">${escapeHtml(match)}</span>`;
+            });
+            element.innerHTML = html;
+        }
+
+        // 导航到上一个/下一个匹配项
+        function navigateSearch(direction) {
+            if (searchMatches.length === 0) return;
+            
+            // 移除当前匹配项的特殊高亮
+            if (currentMatchIndex >= 0 && currentMatchIndex < searchMatches.length) {
+                const currentMatch = searchMatches[currentMatchIndex];
+                const spans = currentMatch.preElement.querySelectorAll('span.search-highlight');
+                spans.forEach(span => span.classList.remove('ring-2', 'ring-primary'));
+            }
+            
+            // 计算新索引
+            currentMatchIndex = (currentMatchIndex + direction + searchMatches.length) % searchMatches.length;
+            
+            // 滚动到新匹配项并高亮
+            scrollToMatch(currentMatchIndex);
+        }
+
+        // 滚动到指定匹配项并高亮
+        function scrollToMatch(index) {
+            if (index < 0 || index >= searchMatches.length) return;
+            
+            const match = searchMatches[index];
+            
+            // 滚动到包含匹配项的结果容器
+            match.preElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            
+            // 高亮当前匹配项
+            const spans = match.preElement.querySelectorAll('span.search-highlight');
+            
+            // 找到正确的span（可能有多个匹配）
+            let matchSpan = null;
+            let currentPos = 0;
+            
+            for (const span of spans) {
+                const spanText = span.textContent;
+                const spanLength = spanText.length;
+                
+                if (currentPos <= match.start && currentPos + spanLength >= match.end) {
+                    matchSpan = span;
+                    break;
+                }
+                
+                currentPos += spanLength;
+            }
+            
+            if (matchSpan) {
+                // 添加特殊高亮
+                matchSpan.classList.add('ring-2', 'ring-primary');
+                
+                // 短暂闪烁效果以吸引注意
+                matchSpan.animate([
+                    { backgroundColor: '#FFF380' },
+                    { backgroundColor: '#FFE066' },
+                    { backgroundColor: '#FFF380' }
+                ], {
+                    duration: 500,
+                    iterations: 1
+                });
+            }
+        }
+
+        // 转义正则表达式特殊字符
+        function escapeRegExp(string) {
+            return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        }
+
+        // 检查是否应该停止请求
+        function checkStopTrigger(responseBody) {
+            // 如果未启用关键词停止功能，直接返回
+            if (!stopTriggerEnabledCheckbox.checked) return false;
+            
+            const keyword = stopTriggerKeywordInput.value.trim();
+            // 如果关键词为空，不停止
+            if (!keyword) return false;
+            
+            // 检查区分大小写
+            const caseSensitive = caseSensitiveCheckbox.checked;
+            
+            // 检查响应体中是否包含关键词
+            if (caseSensitive) {
+                if (responseBody.includes(keyword)) {
+                    return true;
+                }
+            } else {
+                if (responseBody.toLowerCase().includes(keyword.toLowerCase())) {
+                    return true;
+                }
+            }
+            
+            return false;
+        }
+
+        // 高亮显示触发停止的关键词
+        function highlightStopTrigger(preElement, responseBody) {
+            const keyword = stopTriggerKeywordInput.value.trim();
+            if (!keyword) return;
+            
+            const caseSensitive = caseSensitiveCheckbox.checked;
+            const flags = caseSensitive ? 'g' : 'gi';
+            const regex = new RegExp(escapeRegExp(keyword), flags);
+            
+            // 保存原始HTML以便后续搜索功能使用
+            preElement.dataset.originalHtml = preElement.innerHTML;
+            
+            // 高亮触发停止的关键词
+            let html = responseBody.replace(regex, match => {
+                return `<span class="stop-trigger-highlight">${escapeHtml(match)}</span>`;
+            });
+            preElement.innerHTML = html;
+        }
+
+        function setTimer() {
+            const url = urlInput.value.trim();
+            if (!url) {
+                alert('请输入请求URL');
+                return;
+            }
+            
+            const date = timerDateInput.value;
+            const time = timerTimeInput.value;
+            
+            if (!date || !time) {
+                alert('请选择日期和时间');
+                return;
+            }
+            
+            // 解析目标时间
+            const targetTime = new Date(`${date}T${time}`);
+            const now = new Date();
+            
+            // 检查时间是否有效且在未来
+            if (isNaN(targetTime.getTime()) || targetTime <= now) {
+                alert('请选择一个未来的时间');
+                return;
+            }
+            
+            // 计算倒计时（毫秒）
+            const countdownMs = targetTime - now;
+            
+            // 显示定时状态
+            timerStatusElement.classList.remove('hidden');
+            updateCountdown(countdownMs);
+            
+            // 设置倒计时更新
+            if (timerInterval) clearInterval(timerInterval);
+            timerInterval = setInterval(() => {
+                const remainingMs = targetTime - new Date();
+                if (remainingMs <= 0) {
+                    clearInterval(timerInterval);
+                    timerStatusElement.classList.add('hidden');
+                    timerId = null;
+                    startSendingRequests(); // 时间到，开始发送请求
+                } else {
+                    updateCountdown(remainingMs);
+                }
+            }, 1000);
+            
+            // 设置定时器
+            if (timerId) clearTimeout(timerId);
+            timerId = setTimeout(() => {
+                startSendingRequests();
+                cancelTimer(); // 清除定时状态
+            }, countdownMs);
+            
+            // 禁用相关按钮
+            sendRequestBtn.disabled = true;
+            sendRequestBtn.classList.add('opacity-70', 'cursor-not-allowed');
+            setTimerBtn.disabled = true;
+            setTimerBtn.classList.add('opacity-70', 'cursor-not-allowed');
+        }
+        
+        function cancelTimer() {
+            if (timerId) {
+                clearTimeout(timerId);
+                timerId = null;
+            }
+            if (timerInterval) {
+                clearInterval(timerInterval);
+                timerInterval = null;
+            }
+            timerStatusElement.classList.add('hidden');
+            
+            // 启用相关按钮
+            sendRequestBtn.disabled = false;
+            sendRequestBtn.classList.remove('opacity-70', 'cursor-not-allowed');
+            setTimerBtn.disabled = false;
+            setTimerBtn.classList.remove('opacity-70', 'cursor-not-allowed');
+        }
+        
+        function updateCountdown(ms) {
+            const totalSeconds = Math.floor(ms / 1000);
+            const hours = Math.floor(totalSeconds / 3600);
+            const minutes = Math.floor((totalSeconds % 3600) / 60);
+            const seconds = totalSeconds % 60;
+            
+            countdownElement.textContent = 
+                `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+        }
+
+        function startSendingRequests() {
+            // 如果正在发送中，忽略
+            if (isSending) return;
+            
+            const url = urlInput.value.trim();
+            if (!url) {
+                alert('请输入请求URL');
+                return;
+            }
+            
+            // 重置停止触发状态
+            stopTriggered = false;
+            stopTriggerAlert.classList.add('hidden');
+            
+            // 清除初始提示
+            if (resultsContainer.querySelector('#initial-response')) {
+                resultsContainer.removeChild(resultsContainer.querySelector('#initial-response'));
+            }
+            
+            // 获取循环次数和间隔时间
+            totalLoops = parseInt(loopCountInput.value) || 1;
+            const interval = parseInt(requestIntervalInput.value) || 1000;
+            
+            // 重置循环计数器
+            currentLoop = 0;
+            isSending = true;
+            
+            // 更新UI状态
+            sendRequestBtn.disabled = true;
+            sendRequestBtn.classList.add('opacity-70', 'cursor-not-allowed');
+            stopRequestBtn.classList.remove('hidden');
+            progressInfoElement.classList.remove('hidden');
+            progressInfoElement.textContent = `进度: 0/${totalLoops}`;
+            
+            // 立即发送第一个请求
+            sendNextRequest();
+            
+            // 如果需要多次发送，设置定时器
+            if (totalLoops > 1) {
+                // 清除可能存在的旧定时器
+                if (loopInterval) clearInterval(loopInterval);
+                
+                loopInterval = setInterval(() => {
+                    // 检查是否已经完成所有请求或已停止或已触发关键词停止
+                    if (currentLoop >= totalLoops || !isSending || stopTriggered) {
+                        clearInterval(loopInterval);
+                        stopSendingRequests();
+                        return;
+                    }
+                    sendNextRequest();
+                }, interval);
+            }
+        }
+
+        // 发送下一个请求
+        function sendNextRequest() {
+            // 如果已触发停止条件，不再发送请求
+            if (stopTriggered) return;
+            
+            if (currentLoop < totalLoops && isSending) {
+                currentLoop++;
+                progressInfoElement.textContent = `进度: ${currentLoop}/${totalLoops}`;
+                actuallySendRequest(currentLoop);
+            }
+        }
+
+        // 实际发送请求的函数
+        async function actuallySendRequest(requestNumber) {
+            // 如果已触发停止条件，不再发送请求
+            if (stopTriggered) return;
+            
+            // 实时添加一个"处理中"的条目
+            const pendingElement = createPendingElement(requestNumber);
+            resultsContainer.prepend(pendingElement);
+            
+            const url = urlInput.value.trim();
+            
+            // 收集请求头
+            const headers = {};
+            document.querySelectorAll('.header-row').forEach(row => {
+                const key = row.children[0].value.trim();
+                const value = row.children[1].value.trim();
+                if (key && value) {
+                    headers[key] = value;
+                }
+            });
+
+            // 收集请求体
+            let body = null;
+            if (currentMethod === 'POST') {
+                const bodyText = requestBodyInput.value.trim();
+                if (bodyText) {
+                    try {
+                        // 尝试解析为JSON
+                        body = JSON.parse(bodyText);
+                    } catch (e) {
+                        // 如果不是JSON，直接作为文本发送
+                        body = bodyText;
+                    }
+                }
+            }
+
+            // 显示加载状态（只在第一次或单次请求时显示）
+            if (requestNumber === 1 || totalLoops === 1) {
+                loadingIndicator.classList.remove('hidden');
+            }
+
+            const startTime = performance.now();
+            const requestTimestamp = new Date(); // 记录请求时间戳，用于排序和导出
+            const formattedTime = requestTimestamp.toLocaleString(); // 格式化时间用于导出
+            
+            try {
+                // 发送请求
+                const response = await fetch(url, {
+                    method: currentMethod,
+                    headers: headers,
+                    body: body ? (typeof body === 'object' ? JSON.stringify(body) : body) : undefined,
+                    mode: 'cors', // 处理跨域
+                    cache: 'no-cache'
+                });
+
+                // 计算响应时间
+                const endTime = performance.now();
+                const responseTime = Math.round(endTime - startTime);
+                
+                // 处理响应内容
+                let responseBody;
+                const contentType = response.headers.get('content-type');
+                
+                if (contentType && contentType.includes('application/json')) {
+                    responseBody = await response.json();
+                    responseBody = JSON.stringify(responseBody, null, 2);
+                } else {
+                    responseBody = await response.text();
+                }
+
+                // 检查是否应该触发停止
+                const shouldStop = checkStopTrigger(responseBody);
+                
+                // 创建新的响应结果容器
+                const resultContainer = document.createElement('div');
+                resultContainer.className = `bg-gray-50 p-4 rounded-lg border ${shouldStop ? 'border-red-200' : 'border-gray-200'} overflow-auto font-mono text-sm`;
+                resultContainer.setAttribute('data-request-number', requestNumber);
+                resultContainer.setAttribute('data-timestamp', requestTimestamp.getTime());
+                
+                // 如果触发了停止条件，添加标记
+                const stopIndicator = shouldStop ? `
+                    <div class="mb-2 p-1.5 bg-red-50 text-red-800 text-xs rounded flex items-center">
+                        <i class="fa fa-stop-circle mr-1"></i>已触发停止关键词
+                    </div>
+                ` : '';
+                
+                resultContainer.innerHTML = `
+                    ${stopIndicator}
+                    <div class="flex justify-between items-center mb-2 text-xs">
+                        <span class="font-medium">第 ${requestNumber} 次请求</span>
+                        <span class="flex items-center gap-2">
+                            <span class="${response.ok ? 'text-green-600' : 'text-red-600'}">${response.status}</span>
+                            <span class="text-gray-500">${responseTime}ms</span>
+                        </span>
+                    </div>
+                    <pre class="text-gray-800">${escapeHtml(responseBody)}</pre>
+                `;
+                
+                // 如果触发了停止条件，高亮显示关键词
+                if (shouldStop) {
+                    const preElement = resultContainer.querySelector('pre');
+                    highlightStopTrigger(preElement, responseBody);
+                    
+                    // 标记已触发停止
+                    stopTriggered = true;
+                    stopTriggerAlert.classList.remove('hidden');
+                }
+                
+                // 替换"处理中"条目
+                resultsContainer.replaceChild(resultContainer, pendingElement);
+                
+                // 添加到请求项数组（用于排序和导出）
+                requestItems.push({
+                    element: resultContainer,
+                    number: requestNumber,
+                    timestamp: requestTimestamp.getTime(),
+                    formattedTime: formattedTime,
+                    method: currentMethod,
+                    url: url,
+                    status: response.status,
+                    responseTime: responseTime,
+                    responseBody: responseBody
+                });
+                
+                // 重新排序（如果需要）
+                if (orderByOldest) {
+                    reorderResults();
+                }
+                
+                // 如果有活跃的搜索，重新执行搜索以包含新结果
+                if (searchInput.value.trim() !== '') {
+                    performSearch();
+                }
+                
+                // 更新状态显示（使用最后一次请求的结果）
+                statusCodeElement.textContent = response.status;
+                if (response.ok) {
+                    statusCodeElement.className = 'px-2 py-1 rounded bg-green-100 text-green-600 mr-3';
+                } else {
+                    statusCodeElement.className = 'px-2 py-1 rounded bg-red-100 text-red-600 mr-3';
+                }
+                responseTimeElement.textContent = `响应时间: ${responseTime}ms`;
+
+                // 更新下载按钮状态
+                updateDownloadButtonsState();
+
+                // 如果触发了停止条件，停止发送后续请求
+                if (shouldStop) {
+                    stopSendingRequests();
+                } else if (currentLoop >= totalLoops) {
+                    // 如果所有请求完成且未触发停止，启用发送按钮
+                    stopSendingRequests();
+                }
+
+            } catch (error) {
+                // 处理错误
+                const endTime = performance.now();
+                const responseTime = Math.round(endTime - startTime);
+                
+                // 创建错误结果容器
+                const errorContainer = document.createElement('div');
+                errorContainer.className = 'bg-red-50 p-4 rounded-lg border border-red-100 overflow-auto font-mono text-sm';
+                errorContainer.setAttribute('data-request-number', requestNumber);
+                errorContainer.setAttribute('data-timestamp', requestTimestamp.getTime());
+                
+                const errorMessage = `请求失败: ${error.message}`;
+                // 检查是否应该触发停止（错误消息中是否包含关键词）
+                const shouldStop = checkStopTrigger(errorMessage);
+                
+                // 如果触发了停止条件，添加标记
+                const stopIndicator = shouldStop ? `
+                    <div class="mb-2 p-1.5 bg-red-50 text-red-800 text-xs rounded flex items-center">
+                        <i class="fa fa-stop-circle mr-1"></i>已触发停止关键词
+                    </div>
+                ` : '';
+                
+                errorContainer.innerHTML = `
+                    ${stopIndicator}
+                    <div class="flex justify-between items-center mb-2 text-xs">
+                        <span class="font-medium">第 ${requestNumber} 次请求</span>
+                        <span class="flex items-center gap-2 text-red-600">
+                            错误
+                            <span class="text-gray-500">${responseTime}ms</span>
+                        </span>
+                    </div>
+                    <pre class="text-red-800">${escapeHtml(errorMessage)}</pre>
+                `;
+                
+                // 如果触发了停止条件，高亮显示关键词
+                if (shouldStop) {
+                    const preElement = errorContainer.querySelector('pre');
+                    highlightStopTrigger(preElement, errorMessage);
+                    
+                    // 标记已触发停止
+                    stopTriggered = true;
+                    stopTriggerAlert.classList.remove('hidden');
+                }
+                
+                // 替换"处理中"条目
+                resultsContainer.replaceChild(errorContainer, pendingElement);
+                
+                // 添加到请求项数组（用于排序和导出）
+                requestItems.push({
+                    element: errorContainer,
+                    number: requestNumber,
+                    timestamp: requestTimestamp.getTime(),
+                    formattedTime: formattedTime,
+                    method: currentMethod,
+                    url: url,
+                    status: '错误',
+                    responseTime: responseTime,
+                    responseBody: errorMessage
+                });
+                
+                // 重新排序（如果需要）
+                if (orderByOldest) {
+                    reorderResults();
+                }
+                
+                // 如果有活跃的搜索，重新执行搜索以包含新结果
+                if (searchInput.value.trim() !== '') {
+                    performSearch();
+                }
+                
+                // 更新状态显示
+                statusCodeElement.textContent = '错误';
+                statusCodeElement.className = 'px-2 py-1 rounded bg-red-100 text-red-600 mr-3';
+                responseTimeElement.textContent = `响应时间: ${responseTime}ms`;
+                
+                // 更新下载按钮状态
+                updateDownloadButtonsState();
+                
+                // 如果触发了停止条件，停止发送后续请求
+                if (shouldStop) {
+                    stopSendingRequests();
+                } else if (currentLoop >= totalLoops) {
+                    // 如果所有请求完成且未触发停止，启用发送按钮
+                    stopSendingRequests();
+                }
+            } finally {
+                // 如果是最后一次请求或已触发停止，隐藏加载状态
+                if (requestNumber === totalLoops || stopTriggered) {
+                    loadingIndicator.classList.add('hidden');
+                }
+            }
+        }
+
+        // 创建"处理中"的临时元素
+        function createPendingElement(requestNumber) {
+            const pendingElement = document.createElement('div');
+            pendingElement.className = 'bg-gray-50 p-4 rounded-lg border border-gray-200 overflow-auto font-mono text-sm';
+            pendingElement.setAttribute('data-request-number', requestNumber);
+            pendingElement.innerHTML = `
+                <div class="flex justify-between items-center mb-2 text-xs">
+                    <span class="font-medium">第 ${requestNumber} 次请求</span>
+                    <span class="text-blue-600 flex items-center">
+                        <i class="fa fa-spinner fa-spin mr-1"></i>处理中...
+                    </span>
+                </div>
+                <pre class="text-gray-500">等待响应...</pre>
+            `;
+            return pendingElement;
+        }
+
+        // 重新排序结果
+        function reorderResults() {
+            if (requestItems.length === 0) return;
+            
+            // 使用文档片段减少重绘
+            const fragment = document.createDocumentFragment();
+            
+            // 根据排序方式添加元素
+            const sortedItems = [...requestItems].sort((a, b) => {
+                return orderByOldest ? a.number - b.number : b.number - a.number;
+            });
+            
+            sortedItems.forEach(item => {
+                fragment.appendChild(item.element);
+            });
+            
+            // 清空容器并添加所有元素（一次DOM操作）
+            resultsContainer.innerHTML = '';
+            resultsContainer.appendChild(fragment);
+        }
+
+        function stopSendingRequests() {
+            isSending = false;
+            if (loopInterval) {
+                clearInterval(loopInterval);
+                loopInterval = null;
+            }
+            
+            // 更新UI状态
+            sendRequestBtn.disabled = stopTriggered; // 只有触发停止时才保持禁用
+            if (!stopTriggered) {
+                sendRequestBtn.classList.remove('opacity-70', 'cursor-not-allowed');
+            }
+            stopRequestBtn.classList.add('hidden');
+            loadingIndicator.classList.add('hidden');
+        }
+        
+        function clearHistory() {
+            // 清空所有结果
+            resultsContainer.innerHTML = `
+                <div id="initial-response" class="bg-gray-50 p-4 rounded-lg border border-gray-200 overflow-auto font-mono text-sm text-gray-500">
+                    响应结果将在这里实时显示...
+                </div>
+            `;
+            
+            // 重置请求项数组
+            requestItems = [];
+            
+            // 重置状态显示
+            statusCodeElement.textContent = '-';
+            statusCodeElement.className = 'px-2 py-1 rounded bg-gray-100 text-gray-600 mr-3';
+            responseTimeElement.textContent = '响应时间: -';
+            progressInfoElement.textContent = `进度: 0/0`;
+            progressInfoElement.classList.add('hidden');
+            
+            // 重置计数器
+            currentLoop = 0;
+        }
+        
+        // 更新下载按钮状态
+        function updateDownloadButtonsState() {
+            const hasData = requestItems.length > 0;
+            downloadTxtBtn.disabled = !hasData;
+            downloadXlsxBtn.disabled = !hasData;
+            
+            if (hasData) {
+                downloadTxtBtn.classList.remove('opacity-70', 'cursor-not-allowed');
+                downloadXlsxBtn.classList.remove('opacity-70', 'cursor-not-allowed');
+            } else {
+                downloadTxtBtn.classList.add('opacity-70', 'cursor-not-allowed');
+                downloadXlsxBtn.classList.add('opacity-70', 'cursor-not-allowed');
+            }
+        }
+        
+        // 下载TXT格式
+        downloadTxtBtn.addEventListener('click', function() {
+            if (requestItems.length === 0) return;
+            
+            let textContent = "HTTP请求历史记录\n";
+            textContent += "========================================\n\n";
+            
+            // 按请求顺序排序
+            const sortedItems = [...requestItems].sort((a, b) => a.number - b.number);
+            
+            sortedItems.forEach((item, index) => {
+                textContent += `请求 #${item.number}\n`;
+                textContent += `时间: ${item.formattedTime}\n`;
+                textContent += `方法: ${item.method}\n`;
+                textContent += `URL: ${item.url}\n`;
+                textContent += `状态: ${item.status}\n`;
+                textContent += `响应时间: ${item.responseTime}ms\n`;
+                textContent += "响应内容:\n";
+                textContent += item.responseBody + "\n";
+                textContent += (index < sortedItems.length - 1) ? "\n----------------------------------------\n\n" : "\n";
+            });
+            
+            // 创建并下载文件
+            downloadFile(textContent, `http-request-history-${new Date().toISOString().slice(0,10)}.txt`, 'text/plain');
+        });
+        
+        // 下载XLSX格式
+        downloadXlsxBtn.addEventListener('click', function() {
+            if (requestItems.length === 0) return;
+            
+            // 准备Excel数据
+            const wsData = [
+                ["序号", "时间", "方法", "URL", "状态", "响应时间(ms)", "响应内容"]
+            ];
+            
+            // 按请求顺序排序
+            const sortedItems = [...requestItems].sort((a, b) => a.number - b.number);
+            
+            sortedItems.forEach(item => {
+                wsData.push([
+                    item.number,
+                    item.formattedTime,
+                    item.method,
+                    item.url,
+                    item.status,
+                    item.responseTime,
+                    // 限制响应内容长度，避免Excel单元格过大
+                    item.responseBody.length > 500 ? item.responseBody.substring(0, 500) + "..." : item.responseBody
+                ]);
+            });
+            
+            // 创建工作簿和工作表
+            const wb = XLSX.utils.book_new();
+            const ws = XLSX.utils.aoa_to_sheet(wsData);
+            
+            // 调整列宽
+            const wscols = [
+                {wch: 6},  // 序号
+                {wch: 20}, // 时间
+                {wch: 8},  // 方法
+                {wch: 30}, // URL
+                {wch: 8},  // 状态
+                {wch: 15}, // 响应时间
+                {wch: 60}  // 响应内容
+            ];
+            ws['!cols'] = wscols;
+            
+            // 添加工作表到工作簿
+            XLSX.utils.book_append_sheet(wb, ws, "请求历史");
+            
+            // 生成Excel文件并使用FileSaver.js保存
+            const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+            saveAs(new Blob([wbout], { type: 'application/octet-stream' }), `http-request-history-${new Date().toISOString().slice(0,10)}.xlsx`);
+        });
+        
+        // 通用文件下载函数
+        function downloadFile(content, filename, contentType) {
+            const blob = new Blob([content], { type: contentType });
+            const url = URL.createObjectURL(blob);
+            
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            
+            // 清理
+            setTimeout(() => {
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            }, 0);
+        }
+        
+        // 转义HTML特殊字符，防止XSS和格式问题
+        function escapeHtml(text) {
+            return text
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
+    </script>
+</body>
+</html>
+    
